@@ -1,0 +1,38 @@
+services:
+  rethinkdb:
+    container_name: rethinkdb
+    image: rethinkdb:2.4.2
+    restart: unless-stopped
+    volumes:
+      - "rethinkdb-data:/data"
+    command: "rethinkdb --bind all --cache-size 2048"
+
+  stf:
+    container_name: stf
+    image: stf-devicefarm:latest
+    ports:
+      - "7100:7100"
+      - "7110:7110"
+      - "7400-7500:7400-7500"
+      - "5038:5037"  # Sử dụng port 5038 thay vì 5037
+    environment:
+      - TZ=America/Los_Angeles
+      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
+      - STF_ADMIN_EMAIL=sonnguyenh2398@gmail.com
+      - STF_ADMIN_NAME=sonnh
+    restart: unless-stopped
+    depends_on:
+      - rethinkdb
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      stf local 
+      --adb-host host.docker.internal
+      --adb-port 5037
+      --public-ip 172.20.10.2 
+      --provider-min-port 7400 
+      --provider-max-port 7500
+      --allow-remote
+
+volumes:
+  rethinkdb-data: {}

@@ -1,0 +1,248 @@
+version: "3.8"
+
+networks:
+  stf-network:
+    external: true
+
+services:
+  # 1. Database Layer - Must start first
+  rethinkdb:
+    container_name: rethinkdb
+    image: rethinkdb:2.4.2
+    restart: unless-stopped
+    volumes:
+      - rethinkdb-data:/data
+    command: "rethinkdb --bind all --cache-size 2048"
+    ports:
+      - "28015:28015"
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - stf-network
+
+  # 2. ADB Service - Required for device connection
+  adb:
+    container_name: adb
+    image: devicefarmer/adb:latest
+    restart: unless-stopped
+    volumes:
+      - "/dev/bus/usb:/dev/bus/usb"
+    privileged: true
+    ports:
+      - "5037:5037"
+    networks:
+      - stf-network
+
+  # 3. Triproxy Services - Communication bridges (must start before other STF services)
+  stf-triproxy-app:
+    image: stf-devicefarm:latest
+    container_name: stf-triproxy-app
+    network_mode: host
+    command: >
+      stf triproxy app 
+        --bind-pub "tcp://*:7150" 
+        --bind-dealer "tcp://*:7160" 
+        --bind-pull "tcp://*:7170"
+    restart: unless-stopped
+
+  stf-triproxy-dev:
+    image: stf-devicefarm:latest
+    container_name: stf-triproxy-dev
+    network_mode: host
+    command: >
+      stf triproxy dev 
+        --bind-pub "tcp://*:7250" 
+        --bind-dealer "tcp://*:7260" 
+        --bind-pull "tcp://*:7270"
+    restart: unless-stopped
+
+  # 4. Storage Services - Must start before app
+  stf-storage-apk:
+    image: stf-devicefarm:latest
+    container_name: stf-storage-apk
+    ports:
+      - "3300:3000"
+    command: >
+      stf storage-plugin-apk --port 3000 
+                             --storage-url http://stf-app:7105/
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  stf-storage-image:
+    image: stf-devicefarm:latest
+    container_name: stf-storage-image
+    ports:
+      - "3400:3000"
+    command: >
+      stf storage-plugin-image --port 3000 
+                               --storage-url http://stf-app:7105/
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  stf-storage-temp:
+    image: stf-devicefarm:latest
+    container_name: stf-storage-temp
+    volumes:
+      - ./storage:/data
+    ports:
+      - "3500:3000"
+    command: >
+      stf storage-temp --port 3000 
+                       --save-dir /data
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  # 5. Authentication Service - Must start before app
+  stf-auth:
+    image: stf-devicefarm:latest
+    container_name: stf-auth
+    command: >
+      stf auth-mock --port 7120 
+                    --secret 12341234 
+                    --app-url http://10.28.146.50:8081/
+    ports:
+      - "7120:7120"
+    environment:
+      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
+      - RETHINKDB_ENV_DATABASE=stf
+    depends_on:
+      rethinkdb:
+        condition: service_healthy
+    networks:
+      - stf-network
+
+  # 6. Main App Service - Depends on auth and database
+  stf-app:
+    image: stf-devicefarm:latest
+    container_name: stf-app
+    depends_on:
+      rethinkdb:
+        condition: service_healthy
+      stf-auth:
+        condition: service_started
+    environment:
+      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
+      - RETHINKDB_ENV_DATABASE=stf
+      - APP_URL=http://10.28.146.50:8081
+      - AUTH_URL=http://10.28.146.50:8081/auth/mock/
+      - WEBSOCKET_URL=ws://10.28.146.50:8081/ws/
+    ports:
+      - "7105:7105"
+    command: >
+      stf app --port 7105 
+              --auth-url http://10.28.146.50:8081/auth/mock/ 
+              --websocket-url ws://10.28.146.50:8081/ws/ 
+              --secret 12341234
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  # 7. WebSocket Service - Communication layer
+  stf-websocket:
+    image: stf-devicefarm:latest
+    container_name: stf-websocket
+    depends_on:
+      rethinkdb:
+        condition: service_healthy
+      stf-app:
+        condition: service_started
+    environment:
+      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
+      - RETHINKDB_ENV_DATABASE=stf
+    ports:
+      - "3600:3000"
+    command: >
+      stf websocket --port 3000 
+                    --storage-url http://10.28.146.50:8081/ 
+                    --connect-push tcp://10.28.146.50:7170 
+                    --connect-sub tcp://10.28.146.50:7150 
+                    --secret 12341234
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  # 8. API Service - RESTful APIs
+  stf-api:
+    image: stf-devicefarm:latest
+    container_name: stf-api
+    depends_on:
+      rethinkdb:
+        condition: service_healthy
+    environment:
+      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
+      - RETHINKDB_ENV_DATABASE=stf
+    ports:
+      - "3700:3000"
+    command: >
+      stf api --port 3000 
+              --connect-push tcp://10.28.146.50:7170 
+              --connect-sub tcp://10.28.146.50:7150 
+              --connect-push-dev tcp://10.28.146.50:7270 
+              --connect-sub-dev tcp://10.28.146.50:7250 
+              --secret 12341234
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  # 9. Provider Service - Device management (must start last)
+  stf-provider:
+    image: stf-devicefarm:latest
+    container_name: stf-provider
+    depends_on:
+      adb:
+        condition: service_started
+      rethinkdb:
+        condition: service_healthy
+    ports:
+      - "15000-15100:15000-15100"
+    command: >
+      stf provider --name "local-provider" 
+                   --adb-host adb 
+                   --public-ip 10.28.146.50 
+                   --min-port=15000 --max-port=15100 
+                   --connect-push tcp://10.28.146.50:7270 
+                   --connect-sub tcp://10.28.146.50:7250 
+                   --storage-url http://10.28.146.50:8081/
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  # 10. Nginx Proxy - Must start after all services
+  nginx:
+    image: nginx:latest
+    container_name: stf-nginx
+    ports:
+      - "0.0.0.0:8081:80"
+      - "0.0.0.0:8443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      stf-app:
+        condition: service_started
+      stf-auth:
+        condition: service_started
+      stf-api:
+        condition: service_started
+      stf-websocket:
+        condition: service_started
+      stf-storage-apk:
+        condition: service_started
+      stf-storage-image:
+        condition: service_started
+      stf-storage-temp:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+volumes:
+  rethinkdb-data: {}

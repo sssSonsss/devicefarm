@@ -1,0 +1,39 @@
+module.exports = function DeviceListEmptyDirective() {
+  return {
+    restrict: 'E'
+  , template: require('./device-list-empty.pug')
+  , scope: {
+      tracker: '&tracker'
+    }
+  , link: function(scope) {
+      var tracker = scope.tracker()
+
+      scope.empty = !tracker.devices.length
+
+      function update() {
+        var oldEmpty = scope.empty
+        var newEmpty = !tracker.devices.length
+
+        if (oldEmpty !== newEmpty) {
+          // FIX: Use $evalAsync to avoid $apply collision during digest cycle
+          // OLD: scope.safeApply() caused "not a function" error
+          // OLD: scope.$apply() caused "$apply already in progress" error  
+          // NEW: $evalAsync safely schedules update for next digest cycle
+          scope.$evalAsync(function() {
+            scope.empty = newEmpty
+          })
+        }
+      }
+
+      tracker.on('add', update)
+      tracker.on('change', update)
+      tracker.on('remove', update)
+
+      scope.$on('$destroy', function() {
+        tracker.removeListener('add', update)
+        tracker.removeListener('change', update)
+        tracker.removeListener('remove', update)
+      })
+    }
+  }
+}

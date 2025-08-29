@@ -1,0 +1,264 @@
+version: "3.8"
+
+networks:
+  stf-network:
+    external: true
+
+services:
+  # 1. Database Layer - Must start first
+  rethinkdb:
+    container_name: rethinkdb
+    image: rethinkdb:2.4.2
+    restart: unless-stopped
+    volumes:
+      - rethinkdb-data:/data
+    command: "rethinkdb --bind all --cache-size 2048"
+    ports:
+      - "28015:28015"
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - stf-network
+
+  # 2. Database Migration Service - Must run after rethinkdb
+  stf-migrate:
+    image: stf-devicefarm-fixed
+    container_name: stf-migrate
+    depends_on:
+      rethinkdb:
+        condition: service_healthy
+    environment:
+      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
+      - RETHINKDB_ENV_DATABASE=stf
+    command: >
+      stf migrate
+    restart: "no"
+    networks:
+      - stf-network
+
+  # 3. ADB Service - Required for device connection
+  adb:
+    container_name: adb
+    image: devicefarmer/adb:latest
+    restart: unless-stopped
+    volumes:
+      - "/dev/bus/usb:/dev/bus/usb"
+    privileged: true
+    ports:
+      - "5037:5037"
+    networks:
+      - stf-network
+
+  # 3. Triproxy Services - Communication bridges (must start before other STF services)
+  stf-triproxy-app:
+    image: stf-devicefarm-fixed
+    container_name: stf-triproxy-app
+    networks:
+      - stf-network
+    command: >
+      stf triproxy app
+        --bind-pub "tcp://*:7150"
+        --bind-dealer "tcp://*:7160"
+        --bind-pull "tcp://*:7170"
+    restart: unless-stopped
+
+  stf-triproxy-dev:
+    image: stf-devicefarm-fixed
+    container_name: stf-triproxy-dev
+    networks:
+      - stf-network
+    command: >
+      stf triproxy dev
+        --bind-pub "tcp://*:7250"
+        --bind-dealer "tcp://*:7260"
+        --bind-pull "tcp://*:7270"
+    restart: unless-stopped
+
+  # 4. Storage Services - Must start before app
+  stf-storage-apk:
+    image: stf-devicefarm-fixed
+    container_name: stf-storage-apk
+    ports:
+      - "3330:3000"
+    command: >
+      stf storage-plugin-apk --port 3000
+        --storage-url http://stf-storage-apk:3000/
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  stf-storage-image:
+    image: stf-devicefarm-fixed
+    container_name: stf-storage-image
+    ports:
+      - "3400:3000"
+    command: >
+      stf storage-plugin-image --port 3000
+        --storage-url http://stf-storage-image:3000/
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  stf-storage-temp:
+    image: stf-devicefarm-fixed
+    container_name: stf-storage-temp
+    volumes:
+      - ./storage:/data
+    ports:
+      - "3500:3000"
+    command: >
+      stf storage-temp --port 3000
+        --save-dir /data
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  # 5. Authentication Service - Must start before app
+  stf-auth:
+    image: stf-devicefarm-fixed
+    container_name: stf-auth
+    command: >
+      stf auth-mock --port 7120
+        --secret 12341234
+        --app-url http://localhost:7105/
+    ports:
+      - "7120:7120"
+    environment:
+      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
+      - RETHINKDB_ENV_DATABASE=stf
+    depends_on:
+      stf-migrate:
+        condition: service_completed_successfully
+    networks:
+      - stf-network
+
+  # 6. Main App Service - Depends on auth and database
+  stf-app:
+    image: stf-devicefarm-fixed
+    container_name: stf-app
+    depends_on:
+      stf-migrate:
+        condition: service_completed_successfully
+      stf-auth:
+        condition: service_started
+    environment:
+      RETHINKDB_PORT_28015_TCP: tcp://rethinkdb:28015
+      RETHINKDB_ENV_DATABASE: stf
+      MAIN_PORT: 7105
+    ports:
+      - "7105:7105"
+    command: >
+      stf app --port 7105
+        --auth-url http://localhost:7120/auth/mock/
+        --websocket-url ws://localhost:3600/
+        --secret 12341234
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  # 7. WebSocket Service - Communication layer
+  stf-websocket:
+    image: stf-devicefarm-fixed
+    container_name: stf-websocket
+    depends_on:
+      stf-migrate:
+        condition: service_completed_successfully
+      stf-app:
+        condition: service_started
+    environment:
+      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
+      - RETHINKDB_ENV_DATABASE=stf
+    ports:
+      - "3600:3000"
+    command: >
+      stf websocket --port 3000
+        --storage-url http://stf-storage-temp:3000/
+        --connect-push tcp://stf-triproxy-app:7170
+        --connect-sub tcp://stf-triproxy-app:7150
+        --secret 12341234
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  # 8. API Service - RESTful APIs
+  stf-api:
+    image: stf-devicefarm-fixed
+    container_name: stf-api
+    depends_on:
+      stf-migrate:
+        condition: service_completed_successfully
+    environment:
+      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
+      - RETHINKDB_ENV_DATABASE=stf
+    ports:
+      - "3700:3000"
+    command: >
+      stf api --port 3000
+        --connect-push tcp://stf-triproxy-app:7170
+        --connect-sub tcp://stf-triproxy-app:7150
+        --connect-push-dev tcp://stf-triproxy-dev:7270
+        --connect-sub-dev tcp://stf-triproxy-dev:7250
+        --secret 12341234
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  # 8. Processor Service - Device registration bridge
+  stf-processor:
+    image: stf-devicefarm-fixed
+    container_name: stf-processor
+    depends_on:
+      stf-migrate:
+        condition: service_completed_successfully
+    environment:
+      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
+      - RETHINKDB_ENV_DATABASE=stf
+    command: >
+      stf processor stf-processor
+        --connect-app-dealer tcp://stf-triproxy-app:7160
+        --connect-dev-dealer tcp://stf-triproxy-dev:7260
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+  # 9. Provider Service - Device management (must start last)
+  stf-provider:
+    image: stf-devicefarm-fixed
+    container_name: stf-provider
+    environment:
+      - DEBUG=*
+      - LOG_LEVEL=debug
+      - STF_ADMIN_EMAIL=sonnguyenh2398@gmail.com
+      - STF_ADMIN_NAME=sonnh
+    depends_on:
+      adb:
+        condition: service_started
+      stf-migrate:
+        condition: service_completed_successfully
+      stf-processor:
+        condition: service_started
+    ports:
+      - "15000-15100:15000-15100"
+    command: >
+      stf provider --name "local-provider"
+        --adb-host adb
+        --adb-port 5037
+        --public-ip localhost
+        --allow-remote
+        --min-port=15000 --max-port=15100
+        --connect-push tcp://stf-triproxy-dev:7270
+        --connect-sub tcp://stf-triproxy-dev:7250
+        --storage-url http://stf-storage-temp:3000/
+    restart: unless-stopped
+    networks:
+      - stf-network
+
+
+volumes:
+  rethinkdb-data: {}
+

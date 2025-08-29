@@ -1,0 +1,165 @@
+#
+# Copyright © 2022-2024 contains code contributed by Orange SA, authors: Denis Barbaron - Licensed under the Apache license 2.0
+#
+
+FROM ubuntu:22.04
+
+# Sneak the stf executable into $PATH.
+ENV PATH=/app/bin:$PATH
+
+# Work in app dir by default.
+WORKDIR /app
+COPY . /tmp/build/
+
+# Export default app port, not enough for all processes but it should do
+# for now.
+EXPOSE 3000
+
+ARG TARGETARCH
+
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+    export DEBIAN_FRONTEND=noninteractive && \
+    useradd --system \
+      --create-home \
+      --shell /usr/sbin/nologin \
+      stf-build && \
+    useradd --system \
+      --create-home \
+      --shell /usr/sbin/nologin \
+      stf && \
+    sed -i'' 's@http://archive.ubuntu.com/ubuntu/@mirror://mirrors.ubuntu.com/mirrors.txt@' /etc/apt/sources.list && \
+    echo '--- Updating repositories' && \
+    apt-get update && \
+    echo '--- Upgrading repositories' && \
+    apt-get -y dist-upgrade && \
+    apt-get -y install wget python3 build-essential ca-certificates && \
+    cd /tmp && \
+    wget --progress=dot:mega \
+      https://nodejs.org/dist/v18.20.5/node-v18.20.5-linux-x64.tar.xz && \
+    tar -xJf node-v*.tar.xz --strip-components 1 -C /usr/local && \
+    rm node-v*.tar.xz && \
+    npm install -g bower && \
+    su stf-build -s /bin/bash -c '/usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js install' && \
+    apt-get -y install --no-install-recommends libzmq3-dev libprotobuf-dev git graphicsmagick openjdk-8-jdk yasm cmake && \
+    apt-get clean && \
+    rm -rf /var/cache/apt/* /var/lib/apt/lists/* && \
+    mkdir /tmp/bundletool && \
+    cd /tmp/bundletool && \
+    wget --progress=dot:mega \
+      https://github.com/google/bundletool/releases/download/1.2.0/bundletool-all-1.2.0.jar && \
+    mv bundletool-all-1.2.0.jar bundletool.jar && \
+    mkdir -p /app && \
+    chown -R stf:stf /tmp/build /tmp/bundletool /app && \
+    set -x && \
+    echo '--- Building app' && \
+    cd /tmp/build && \
+    export PATH=$PWD/node_modules/.bin:$PATH && \
+    bower config set strict-ssl false --global && \
+    bower config set registry http://registry.bower.io --global && \
+    echo 'npm config set strict-ssl false' | su stf -s /bin/bash && \
+    echo 'npm config set registry http://registry.npmjs.org/' | su stf -s /bin/bash && \
+    echo 'npm install --python="/usr/bin/python3" --omit=optional --loglevel http' | su stf -s /bin/bash && \
+    echo '--- Assembling app' && \
+    echo 'npm pack' | su stf -s /bin/bash && \
+  tar xzf devicefarmer-stf-*.tgz --strip-components 1 -C /app && \
+  cp /tmp/build/webpack.config.js /app/webpack.config.js && \
+    echo '/tmp/build/node_modules/.bin/bower cache clean' | su stf -s /bin/bash && \
+    npm prune --omit=dev && \
+  mv node_modules /app && \
+  cd /app && npm install webpack && \
+    rm -rf ~/.node-gyp && \
+    mkdir /app/bundletool && \
+    mv /tmp/bundletool/* /app/bundletool && \
+    cd /app && \
+    find /tmp -mindepth 1 ! -regex '^/tmp/hsperfdata_root\(/.*\)?' -delete && \
+    rm -rf doc .github .tx .semaphore *.md *.yaml LICENSE Dockerfile* \
+      .eslintrc .nvmrc .tool-versions res/.eslintrc \
+      # Giữ lại webpack.config.js để STF runtime không lỗi
+      # KHÔNG xóa webpack.config.js
+      && \
+    cd && \
+    rm -rf .npm .cache .config .local && \
+    cd /app; \
+  fi
+  
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+    export DEBIAN_FRONTEND=noninteractive && \
+    useradd --system \
+      --create-home \
+      --shell /usr/sbin/nologin \
+      stf-build && \
+    useradd --system \
+      --create-home \
+      --shell /usr/sbin/nologin \
+      stf && \
+    sed -i'' 's@http://archive.ubuntu.com/ubuntu/@mirror://mirrors.ubuntu.com/mirrors.txt@' /etc/apt/sources.list && \
+    echo '--- Updating repositories' && \
+    apt-get update && \
+    echo '--- Upgrading repositories' && \
+    apt-get -y dist-upgrade && \
+    apt-get -y install wget python3 build-essential ca-certificates && \
+    cd /tmp && \
+    wget --progress=dot:mega \
+      https://nodejs.org/dist/v18.20.5/node-v18.20.5-linux-arm64.tar.xz && \
+    tar -xJf node-v*.tar.xz --strip-components 1 -C /usr/local && \
+    rm node-v*.tar.xz && \
+    npm install -g bower && \
+    su stf-build -s /bin/bash -c '/usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js install' && \
+    apt-get -y install --no-install-recommends libzmq3-dev libprotobuf-dev git graphicsmagick yasm cmake && \
+    apt-get clean && \
+    rm -rf /var/cache/apt/* /var/lib/apt/lists/* && \
+    mkdir -p /app && \
+    chown -R stf:stf /tmp/build /app && \
+    set -x && \
+    echo '--- Building app' && \
+    cd /tmp/build && \
+    export PATH=$PWD/node_modules/.bin:$PATH && \
+    bower config set strict-ssl false --global && \
+    bower config set registry http://registry.bower.io --global && \
+    echo 'npm config set strict-ssl false' | su stf -s /bin/bash && \
+    echo 'npm config set registry http://registry.npmjs.org/' | su stf -s /bin/bash && \
+    echo 'npm install --python="/usr/bin/python3" --omit=optional --loglevel http' | su stf -s /bin/bash && \
+    echo '--- Assembling app' && \
+    echo 'npm pack' | su stf -s /bin/bash && \
+    tar xzf devicefarmer-stf-*.tgz --strip-components 1 -C /app && \
+    echo '/tmp/build/node_modules/.bin/bower cache clean' | su stf -s /bin/bash && \
+    npm prune --omit=dev && \
+    mv node_modules /app && \
+    rm -rf ~/.node-gyp && \
+    mkdir /app/bundletool && \
+    wget --progress=dot:mega \
+      https://github.com/google/bundletool/releases/download/1.2.0/bundletool-all-1.2.0.jar && \
+    mv bundletool-all-1.2.0.jar /app/bundletool/bundletool.jar && \
+    cd /app && \
+    find /tmp -mindepth 1 ! -regex '^/tmp/hsperfdata_root\(/.*\)?' -delete && \
+    rm -rf doc .github .tx .semaphore *.md *.yaml LICENSE Dockerfile* \
+      .eslintrc .nvmrc .tool-versions res/.eslintrc && \
+    cd && \
+    rm -rf .npm .cache .config .local && \
+    cd /app; \
+  fi
+
+# Copy the STF binary.
+COPY --chown=stf:stf bin/stf /app/bin/stf
+
+# Copy the frontend build output
+
+# Copy bower_components vào image
+COPY --chown=stf:stf res/bower_components /app/res/bower_components
+
+# Copy logo files
+COPY --chown=stf:stf res/common/logo/exports /app/static/app/logo
+
+COPY --chown=stf:stf res/build /app/static/app/build
+
+# Switch to the stf user.
+USER stf
+
+# Expose the default port.
+EXPOSE 3000
+
+# And switch to the app directory.
+WORKDIR /app
+
+# Default to the stf binary.
+ENTRYPOINT ["/app/bin/stf"]
