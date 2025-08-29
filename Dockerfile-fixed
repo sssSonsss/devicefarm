@@ -141,6 +141,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 
 # Copy the STF binary.
 COPY --chown=stf:stf bin/stf /app/bin/stf
+RUN chmod 755 /app/bin/stf
 
 # Copy the frontend build output
 
