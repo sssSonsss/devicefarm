@@ -32,7 +32,7 @@ module.exports = function DevicesServiceFactory(
 
   DevicesService.getOboeDevices = function(target, fields, addDevice) {
     return oboe({
-      url: CommonService.getBaseUrl() + '/api/v1/devices?target=' + target + '&fields=' + fields,
+      url: window.STF_CONFIG.API_BASE_URL + '/api/v1/devices?target=' + target + '&fields=' + fields,
       withCredentials: true,
       headers: {
         'X-XSRF-TOKEN': document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] || ''

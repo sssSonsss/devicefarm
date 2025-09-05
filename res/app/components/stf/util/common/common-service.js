@@ -211,13 +211,19 @@ module.exports = function CommonServiceFactory(
   }
 
   service.getBaseUrl = function() {
-    // API endpoints are on stf-api service (port 3700)
-    return $location.protocol()
-    + '://'
-    + $location.host()
-    + ':3700'
+  // API endpoints are on stf-api service (port 3700)
+  return $location.protocol()
+  + '://'
+  + $location.host()
+  + ':3700'
   }
 
+  service.getContactUrl = function() {
+    // API endpoints are on stf-api service (port 7120)
+    return $location.protocol()
+    + '://'
+    + $location.host()+':'
+  }
   return service
 }
 

@@ -38,7 +38,7 @@ module.exports = function MenuCtrl(
   }
 
   // Auth contact endpoint is on stf-auth service (port 7120)
-  $http.get('http://localhost:7120/auth/contact').then(function(response) {
+  $http.get(CommonService.getContactUrl() + '/auth/contact').then(function(response) {
     $scope.contactEmail = response.data.contact.email
   })
 

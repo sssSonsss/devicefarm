@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@cypress/request": "^3.0.6",
+    "cors": "^2.8.5",
     "@devicefarmer/adbkit": "^3.3.8",
     "@devicefarmer/adbkit-apkreader": "^3.2.4",
     "@devicefarmer/adbkit-monkey": "^1.2.1",

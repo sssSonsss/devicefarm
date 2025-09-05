@@ -122,10 +122,12 @@ services:
   stf-auth:
     image: stf-devicefarm-fixed
     container_name: stf-auth
+    env_file:
+      - .env
     command: >
-      stf auth-mock --port 7120
-        --secret 12341234
-        --app-url http://localhost:7105/
+      stf auth-mock --port ${STF_AUTH_PORT}
+        --secret ${STF_SECRET}
+        --app-url http://${STF_PUBLIC_IP}:${STF_MAIN_PORT}/
     ports:
       - "7120:7120"
     environment:
@@ -146,17 +148,19 @@ services:
         condition: service_completed_successfully
       stf-auth:
         condition: service_started
+    env_file:
+      - .env
     environment:
-      RETHINKDB_PORT_28015_TCP: tcp://rethinkdb:28015
-      RETHINKDB_ENV_DATABASE: stf
-      MAIN_PORT: 7105
+      RETHINKDB_PORT_28015_TCP: tcp://${RETHINKDB_HOST}:${RETHINKDB_PORT}
+      RETHINKDB_ENV_DATABASE: ${RETHINKDB_DATABASE}
+      MAIN_PORT: ${STF_MAIN_PORT}
     ports:
       - "7105:7105"
     command: >
-      stf app --port 7105
-        --auth-url http://localhost:7120/auth/mock/
-        --websocket-url ws://localhost:3600/
-        --secret 12341234
+      stf app --port ${STF_MAIN_PORT}
+        --auth-url http://${STF_PUBLIC_IP}:${STF_AUTH_PORT}/auth/mock/
+        --websocket-url ws://${STF_PUBLIC_IP}:${STF_WEBSOCKET_PORT}/
+        --secret ${STF_SECRET}
     restart: unless-stopped
     networks:
       - stf-network
@@ -170,17 +174,19 @@ services:
         condition: service_completed_successfully
       stf-app:
         condition: service_started
+    env_file:
+      - .env
     environment:
-      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
-      - RETHINKDB_ENV_DATABASE=stf
+      - RETHINKDB_PORT_28015_TCP=tcp://${RETHINKDB_HOST}:${RETHINKDB_PORT}
+      - RETHINKDB_ENV_DATABASE=${RETHINKDB_DATABASE}
     ports:
-      - "3600:3000"
+      - "${STF_WEBSOCKET_PORT}:3000"
     command: >
       stf websocket --port 3000
         --storage-url http://stf-storage-temp:3000/
         --connect-push tcp://stf-triproxy-app:7170
         --connect-sub tcp://stf-triproxy-app:7150
-        --secret 12341234
+        --secret ${STF_SECRET}
     restart: unless-stopped
     networks:
       - stf-network
@@ -192,18 +198,20 @@ services:
     depends_on:
       stf-migrate:
         condition: service_completed_successfully
+    env_file:
+      - .env
     environment:
-      - RETHINKDB_PORT_28015_TCP=tcp://rethinkdb:28015
-      - RETHINKDB_ENV_DATABASE=stf
+      - RETHINKDB_PORT_28015_TCP=tcp://${RETHINKDB_HOST}:${RETHINKDB_PORT}
+      - RETHINKDB_ENV_DATABASE=${RETHINKDB_DATABASE}
     ports:
-      - "3700:3000"
+      - "${STF_API_PORT}:3000"
     command: >
       stf api --port 3000
         --connect-push tcp://stf-triproxy-app:7170
         --connect-sub tcp://stf-triproxy-app:7150
         --connect-push-dev tcp://stf-triproxy-dev:7270
         --connect-sub-dev tcp://stf-triproxy-dev:7250
-        --secret 12341234
+        --secret ${STF_SECRET}
     restart: unless-stopped
     networks:
       - stf-network
@@ -230,11 +238,13 @@ services:
   stf-provider:
     image: stf-devicefarm-fixed
     container_name: stf-provider
+    env_file:
+      - .env
     environment:
       - DEBUG=*
       - LOG_LEVEL=debug
-      - STF_ADMIN_EMAIL=sonnguyenh2398@gmail.com
-      - STF_ADMIN_NAME=sonnh
+      - STF_ADMIN_EMAIL=${STF_ADMIN_EMAIL}
+      - STF_ADMIN_NAME=${STF_ADMIN_NAME}
     depends_on:
       adb:
         condition: service_started
@@ -243,16 +253,16 @@ services:
       stf-processor:
         condition: service_started
     ports:
-      - "15000-15100:15000-15100"
+      - "${STF_PROVIDER_MIN_PORT}-${STF_PROVIDER_MAX_PORT}:${STF_PROVIDER_MIN_PORT}-${STF_PROVIDER_MAX_PORT}"
     command: >
-      stf provider --name "local-provider"
-        --adb-host adb
-        --adb-port 5037
-        --public-ip localhost
-        --allow-remote
-        --min-port=15000 --max-port=15100
-        --connect-push tcp://stf-triproxy-dev:7270
-        --connect-sub tcp://stf-triproxy-dev:7250
+      stf provider --name "local-provider" \
+        --adb-host adb \
+        --adb-port 5037 \
+        --public-ip ${STF_PUBLIC_IP} \
+        --allow-remote \
+        --min-port=${STF_PROVIDER_MIN_PORT} --max-port=${STF_PROVIDER_MAX_PORT} \
+        --connect-push tcp://stf-triproxy-dev:7270 \
+        --connect-sub tcp://stf-triproxy-dev:7250 \
         --storage-url http://stf-storage-temp:3000/
     restart: unless-stopped
     networks:
